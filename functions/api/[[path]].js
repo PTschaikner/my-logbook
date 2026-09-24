@@ -13,6 +13,8 @@
 //   GET    /api/sessions/:id              session + ticks
 //   DELETE /api/sessions/:id              remove a session (and its ticks)
 //   GET    /api/stats                     aggregates for the Stats view
+//   GET    /api/export                    tidy CSV (or ZIP of CSVs) of the log
+//   POST   /api/restore                   write back sessions parsed from an export (the app dedupes first)
 //   GET    /api/settings/:key             read a setting
 //   PUT    /api/settings/:key             { value } write a setting
 
@@ -104,6 +106,7 @@ async function route({ db, method, parts, body, url }) {
 
   if (a === "stats" && method === "GET") return stats(db, url);
   if (a === "export" && method === "GET") return exportCsv(db, url);
+  if (a === "restore" && method === "POST") return restore(db, body);
 
   if (a === "settings" && b) {
     if (method === "GET") return getSetting(db, b);
@@ -1026,7 +1029,7 @@ function exportColumns(modes) {
   const climbing = modes.some(m => m !== "cross"), training = has("cross");
   const cols = ["date", "category"];
   if (climbing) cols.push("place");                                   // training "place" is only an auto label
-  if (["crag", "boulder", "multi"].some(has)) cols.push("region");
+  if (["crag", "boulder", "multi"].some(has)) cols.push("region", "lat", "lng");
   cols.push("session_id", "session_note");
   if (new Set(modes.map(rowType)).size > 1) cols.push("type");
   cols.push("name");
@@ -1035,7 +1038,7 @@ function exportColumns(modes) {
   if (["crag", "gym", "multi"].some(has)) cols.push("length_m");      // boulders don't count metres
   if (has("multi")) cols.push("pitches_done", "pitches_total", "pitch_log");
   if (climbing) cols.push("note");
-  if (has("board")) cols.push("benchmark", "source");
+  if (has("board")) cols.push("benchmark", "source", "sync_key");   // sync_key lets a re-import / re-sync skip board ascents
   if (training) cols.push("exercise_kind", "sets", "reps", "weight_kg", "distance_m", "elevation_m", "duration_min", "effort");
   return cols;
 }
@@ -1046,7 +1049,7 @@ async function exportRows(db, modes, dateCond) {
   if (climbModes.length) {
     const list = climbModes.map(m => `'${m}'`).join(",");
     const ticks = (await db.prepare(
-      `SELECT s.id AS sid, s.date, s.mode, s.place, s.note AS snote, c.region,
+      `SELECT s.id AS sid, s.date, s.mode, s.place, s.note AS snote, c.region, c.lat, c.lng,
               t.name, t.grade, t.grade_system, t.grade_fr, t.result, t.tries, t.length, t.note,
               t.pitches, t.high_point, t.pitches_total, t.is_benchmark, t.import_key
          FROM ticks t JOIN sessions s ON s.id = t.session_id LEFT JOIN crags c ON c.id = s.crag_id
@@ -1059,20 +1062,20 @@ async function exportRows(db, modes, dateCond) {
       if (multi) {
         try {
           pitchLog = JSON.parse(t.pitches || "[]").map((p, i) =>
-            ["P" + (i + 1), p.grade_fr || p.grade || "?", p.role || "lead",
+            ["P" + (i + 1), p.grade || p.grade_fr || "?", p.role || "lead",
              p.result === "notreached" ? "not reached" : p.result, p.length ? p.length + "m" : ""].filter(Boolean).join(" ")
           ).join("; ");
         } catch (e) {}
       }
       rows.push({
-        mode: t.mode, date: t.date, category: MODE_LABEL[t.mode] || t.mode, place: t.place, region: t.region,
+        mode: t.mode, date: t.date, category: MODE_LABEL[t.mode] || t.mode, place: t.place, region: t.region, lat: t.lat, lng: t.lng,
         session_id: t.sid, session_note: t.snote, type: rowType(t.mode),
         name: t.name, grade: t.grade, grade_system: t.grade_system, grade_standard: t.grade_fr || t.grade,
         result: t.result === "redpoint" && bouldery ? "send" : (t.result || ""),
         tries: multi ? "" : t.tries, length_m: bouldery ? "" : (t.length || ""),
         pitches_done: multi ? t.high_point : "", pitches_total: multi ? t.pitches_total : "", pitch_log: pitchLog,
         note: t.note, benchmark: t.mode === "board" ? (t.is_benchmark ? "yes" : "no") : "",
-        source: t.import_key ? "tension-sync" : "manual",
+        source: t.import_key ? "tension-sync" : "manual", sync_key: t.import_key || "",
       });
     }
   }
@@ -1173,6 +1176,122 @@ function makeZip(files) {
   const out = new Uint8Array(parts.reduce((a, b) => a + b.length, 0)); let pos = 0;
   for (const part of parts) { out.set(part, pos); pos += part.length; }
   return out;
+}
+
+/* --------------------------------- restore ------------------------------- */
+
+// Writes back sessions the app parsed from an export CSV/ZIP. The app does the
+// duplicate check (it compares the file with a fresh export of this logbook) and
+// sends small batches, so one request stays well under the Free plan's 50 queries.
+// Each item runs as one D1 batch (a transaction): a session lands whole or not at all.
+// Body: { items: [
+//   { ref, op:"new",    session:{date,mode,place,note,region,lat,lng,intensity}, ticks:[...], entries:[...] },
+//   { ref, op:"append", session_id, ticks:[...] },            // climbs missing from a session you already have
+//   { ref, op:"multi",  ascent:{...same body as POST /multi/ascents, plus region/lat/lng} } ] }
+// Returns { results: [{ ref, session_id, ticks, skipped }] }.
+async function restore(db, body) {
+  const items = Array.isArray(body?.items) ? body.items : [];
+  if (items.length > 60) return json({ error: "too many items in one request" }, 400);
+  const results = [];
+  for (const it of items) {
+    const ref = it?.ref ?? null;
+    if (it?.op === "multi") {
+      const a = it.ascent || {};
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(clean(a.date))) { results.push({ ref, error: "bad date" }); continue; }
+      const area = clean(a.area);
+      if (area) await db.batch(cragUpsert(db, area, a));
+      const res = await logMultiAscent(db, a);
+      const j = await res.json();
+      results.push(res.ok ? { ref, session_id: j.session_id, ticks: 1, skipped: 0 } : { ref, error: j.error || "failed" });
+      continue;
+    }
+    let stmts = [], sid, sidArgs, mode, sessIdx = -1;
+    if (it?.op === "append") {
+      const s = await db.prepare(`SELECT id, mode FROM sessions WHERE id = ?`).bind(+it.session_id || 0).first();
+      if (!s) { results.push({ ref, error: "session not found" }); continue; }
+      mode = s.mode; sid = "?"; sidArgs = [s.id];
+    } else {
+      const ss = it?.session || {};
+      const date = clean(ss.date);
+      mode = normMode(ss.mode);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { results.push({ ref, error: "bad date" }); continue; }
+      let place = clean(ss.place);
+      const withCrag = (mode === "crag" || mode === "boulder") && place;
+      if (withCrag) stmts.push(...cragUpsert(db, place, ss));
+      const entries = mode === "cross" && Array.isArray(it.entries) ? it.entries : [];
+      if (mode === "cross") place = crossPlace(entries, place || "Training");
+      const intensity = mode === "cross" ? Math.max(0, Math.min(4, parseInt(ss.intensity, 10) || 0)) : 0;
+      sessIdx = stmts.length;
+      stmts.push(db.prepare(
+        `INSERT INTO sessions (date, mode, crag_id, place, note, intensity)
+         VALUES (?, ?, ${withCrag ? "(SELECT id FROM crags WHERE lower(name) = lower(?))" : "NULL"}, ?, ?, ?) RETURNING id`
+      ).bind(...[date, mode].concat(withCrag ? [place] : [], [place, clean(ss.note), intensity])));
+      sid = "(SELECT MAX(id) FROM sessions)"; sidArgs = [];
+      for (const e of entries) {
+        const kind = ["sets", "endurance", "effort"].includes(e?.kind) ? e.kind : "effort";
+        const name = clean(e?.name) || "Exercise";
+        const pos = (v) => { const n = Number(v); return isFinite(n) && n > 0 ? n : null; };
+        stmts.push(db.prepare(`INSERT OR IGNORE INTO exercises (name, kind) VALUES (?, ?)`).bind(name, kind));
+        stmts.push(db.prepare(
+          `INSERT INTO cross_entries (session_id, exercise_id, name, kind, sets, reps, weight, distance_m, elevation_m, duration_s)
+           VALUES (${sid}, (SELECT id FROM exercises WHERE name = ?), ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).bind(name, name, kind,
+          kind === "sets" ? pos(e.sets) : null, kind === "sets" ? pos(e.reps) : null, kind === "sets" ? pos(e.weight) : null,
+          kind === "endurance" ? pos(e.distance_m) : null, kind === "endurance" ? pos(e.elevation_m) : null,
+          kind !== "sets" && pos(e.duration_s) ? Math.round(pos(e.duration_s)) : null));
+      }
+    }
+    // Climbs. Outdoors every named climb hangs off a saved route at the session's crag,
+    // created if it isn't there yet — same as logging by hand.
+    const firstTick = stmts.length;
+    const ticks = mode === "cross" || mode === "multi" ? [] : (Array.isArray(it.ticks) ? it.ticks : []);
+    const outdoor = mode === "crag" || mode === "boulder";
+    const crag = `(SELECT crag_id FROM sessions WHERE id = ${sid})`;
+    for (const t of ticks) {
+      const name = clean(t?.name), grade = clean(t?.grade), system = normSystem(t?.grade_system), fr = toFrench(grade, system);
+      let length = parseInt(t?.length, 10);
+      if (!(length > 0)) length = 20;
+      if (BOULDERY.has(mode)) length = 0;
+      const key = clean(t?.sync_key) || null;
+      const linked = outdoor && name;
+      if (linked) stmts.push(db.prepare(
+        `INSERT INTO routes (crag_id, name, grade, grade_system, grade_fr, length, kind)
+         SELECT ${crag}, ?, ?, ?, ?, ?, ? WHERE ${crag} IS NOT NULL
+            AND NOT EXISTS (SELECT 1 FROM routes WHERE crag_id = ${crag} AND lower(name) = lower(?))`
+      ).bind(...sidArgs, name, grade, system, fr, length, mode === "boulder" ? "boulder" : "sport", ...sidArgs, ...sidArgs, name));
+      stmts.push(db.prepare(
+        `INSERT INTO ticks (session_id, route_id, name, grade, grade_system, grade_fr, length, result, tries, note, import_key, is_benchmark)
+         SELECT ${sid}, ${linked ? `(SELECT id FROM routes WHERE crag_id = ${crag} AND lower(name) = lower(?))` : "NULL"},
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+          WHERE ? IS NULL OR NOT EXISTS (SELECT 1 FROM ticks WHERE import_key = ?)`
+      ).bind(...sidArgs, ...(linked ? sidArgs.concat(name) : []),
+        name, grade, system, fr, length, normResult(t?.result), Math.max(1, parseInt(t?.tries, 10) || 1), clean(t?.note),
+        key, t?.benchmark ? 1 : 0, key, key));
+    }
+    if (!stmts.length) { results.push({ ref, session_id: sidArgs[0] || null, ticks: 0, skipped: 0 }); continue; }
+    const out = await db.batch(stmts);
+    let added = 0, skipped = 0, k = firstTick;   // each tick = [route insert] + tick insert
+    for (const t of ticks) {
+      if (outdoor && clean(t?.name)) k++;
+      const changes = out[k]?.meta?.changes || 0;
+      if (changes) added++; else skipped++;
+      k++;
+    }
+    const newId = it?.op === "append" ? sidArgs[0] : out[sessIdx]?.results?.[0]?.id;
+    results.push({ ref, session_id: newId ?? null, ticks: added, skipped });
+  }
+  return json({ results });
+}
+// Create the crag if it's new; fill in region / coordinates only where they're still empty.
+function cragUpsert(db, name, src) {
+  const region = clean(src?.region);
+  const lat = num(src?.lat), lng = num(src?.lng);
+  return [
+    db.prepare(`INSERT INTO crags (name, region, lat, lng) SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM crags WHERE lower(name) = lower(?))`)
+      .bind(name, region, lat, lng, name),
+    db.prepare(`UPDATE crags SET region = CASE WHEN region = '' THEN ? ELSE region END, lat = COALESCE(lat, ?), lng = COALESCE(lng, ?) WHERE lower(name) = lower(?)`)
+      .bind(region, lat, lng, name),
+  ];
 }
 
 /* -------------------------------- helpers -------------------------------- */

@@ -102,6 +102,12 @@
   .exp-cats button .d{width:8px; height:8px; border-radius:2px; opacity:.35}
   .exp-cats button.on{border-color:var(--ink); color:var(--ink); background:var(--paper)}
   .exp-cats button.on .d{opacity:1}
+  .imp-box{margin-top:10px; padding:12px 14px; background:var(--card); border:1px solid var(--edge-strong); border-radius:12px; font-size:14px; line-height:1.45}
+  .imp-box .imp-files{font-size:12.5px; color:var(--ink-soft); margin-bottom:6px; overflow-wrap:anywhere}
+  .imp-box ul{margin:6px 0 0; padding-left:18px}
+  .imp-box .warn{color:var(--ink-soft); font-size:12.5px; margin-top:6px}
+  .imp-box .bar{height:6px; border-radius:3px; background:var(--edge); margin-top:10px; overflow:hidden}
+  .imp-box .bar span{display:block; height:100%; width:0; background:var(--accent); transition:width .2s}
   #view-settings .hint{font-size:12.5px; line-height:1.45; color:var(--ink-soft); margin:8px 2px 0}
   #themeSeg{margin-top:0}
 
@@ -945,6 +951,19 @@
     </div>
     <button type="button" class="btn btn-solid" id="expBtn" style="width:100%; margin-top:12px">Download CSV</button>
     <p class="hint">One row per climb or exercise. Columns match what you export: grades and results for climbing, pitches for multi-pitch, sets, time and effort for training. Opens in Excel, Numbers or Google Sheets.</p>
+  </div>
+  <div class="block">
+    <h2>Import</h2>
+    <div class="setlist">
+      <div class="setrow2 plain">
+        <div><div class="sl-name">Restore from an export</div><div class="sl-sub">The CSV files or the ZIP from Download CSV. Anything already in your logbook is skipped.</div></div>
+        <button type="button" class="linkbtn" id="impPick" style="white-space:nowrap">Choose file</button>
+      </div>
+    </div>
+    <input type="file" id="impFile" accept=".csv,.zip,text/csv,application/zip" multiple style="display:none">
+    <div class="imp-box" id="impBox" style="display:none"></div>
+    <button type="button" class="btn btn-solid" id="impBtn" style="width:100%; margin-top:12px; display:none">Import</button>
+    <p class="hint">Useful for moving to a fresh install. You can import the same file twice: climbs, exercises and multi-pitch ascents that are already there aren't added again.</p>
   </div>
 </main>
 
@@ -3749,6 +3768,308 @@
       });
     }).catch(function(err){ flash(err.message==="unauthorized"?"Sign-in needed to export":"Couldn\u2019t export \u2014 check connection"); })
       .then(function(){ btn.disabled=false; btn.textContent="Download CSV"; });
+  });
+
+  /* ---- import (restore from an export) ----
+     Everything is read in the browser: the CSV/ZIP is parsed here, compared with a fresh
+     export of this logbook, and only what's missing is sent to /restore in small batches
+     (Cloudflare's Free plan allows 50 database queries per request). */
+  var IMP_BUDGET=40, IMP_CHUNK=16;
+  var impPlan=null, impBusy=false;
+  var IMP_MODES=(function(){
+    var m={}, slugs={crag:"outdoor-routes",gym:"indoor-routes",multi:"multi-pitch",boulder:"outdoor-boulder",gymboulder:"indoor-boulder",board:"board",cross:"training"};
+    Object.keys(MODE_LABELS).forEach(function(k){ m[k]=k; m[MODE_LABELS[k].toLowerCase()]=k; m[slugs[k]]=k; });
+    m["multi pitch"]="multi"; m["multipitch"]="multi";
+    return m;
+  })();
+  var IMP_EFFORT=["","mild","moderate","hard","max"];
+  function impLow(v){ return String(v==null?"":v).trim().toLowerCase().replace(/\s+/g," "); }
+  function impNum(v){ v=String(v==null?"":v).trim().replace(",","."); if(v==="") return ""; var n=Number(v); return isFinite(n)?String(n):""; }
+  function impDate(v){
+    v=String(v||"").trim(); var p=function(x){ return (x.length<2?"0":"")+x; }, m;
+    if((m=v.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/))) return m[1]+"-"+p(m[2])+"-"+p(m[3]);
+    if((m=v.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/))) return m[3]+"-"+p(m[2])+"-"+p(m[1]);   // Excel, German style
+    return "";
+  }
+  function impResult(v){
+    v=impLow(v);
+    if(v==="send"||v==="sent"||v==="redpoint"||v==="rp"||v==="top") return "redpoint";
+    if(v==="onsight"||v==="os") return "onsight";
+    if(v==="flash"||v==="fl") return "flash";
+    if(v==="attempt"||v==="try"||v==="tries"||v==="project") return "attempt";
+    return "";
+  }
+  function impCount(s,ch){ return s.split(ch).length-1; }
+  function parseCsv(text){
+    if(text.charCodeAt(0)===0xFEFF) text=text.slice(1);
+    var nl=text.search(/\r?\n/), first=nl<0?text:text.slice(0,nl);
+    var sep=[",",";","\t"].reduce(function(a,b){ return impCount(first,b)>impCount(first,a)?b:a; });
+    var rows=[], row=[], cell="", q=false;
+    for(var i=0;i<text.length;i++){
+      var ch=text[i];
+      if(q){ if(ch==='"'){ if(text[i+1]==='"'){ cell+='"'; i++; } else q=false; } else cell+=ch; }
+      else if(ch==='"') q=true;
+      else if(ch===sep){ row.push(cell); cell=""; }
+      else if(ch==="\n"){ row.push(cell); rows.push(row); row=[]; cell=""; }
+      else if(ch!=="\r") cell+=ch;
+    }
+    if(cell!==""||row.length){ row.push(cell); rows.push(row); }
+    return rows.filter(function(r){ return r.some(function(c){ return c.trim()!==""; }); });
+  }
+  function decodeText(bytes){
+    try{ return new TextDecoder("utf-8",{fatal:true}).decode(bytes); }
+    catch(e){ return new TextDecoder("windows-1252").decode(bytes); }   // re-saved by Excel without UTF-8
+  }
+  // Minimal ZIP reader: stored entries (our export) and deflated ones (re-zipped by the OS).
+  function unzipCsvs(buf){
+    var dv=new DataView(buf), u8=new Uint8Array(buf), eocd=-1;
+    for(var i=u8.length-22;i>=Math.max(0,u8.length-66000);i--){ if(dv.getUint32(i,true)===0x06054b50){ eocd=i; break; } }
+    if(eocd<0) return Promise.reject(new Error("That ZIP file can't be read"));
+    var count=dv.getUint16(eocd+10,true), off=dv.getUint32(eocd+16,true), jobs=[];
+    for(var k=0;k<count;k++){
+      if(dv.getUint32(off,true)!==0x02014b50) break;
+      var method=dv.getUint16(off+10,true), csize=dv.getUint32(off+20,true);
+      var nlen=dv.getUint16(off+28,true), elen=dv.getUint16(off+30,true), clen=dv.getUint16(off+32,true), loc=dv.getUint32(off+42,true);
+      var name=new TextDecoder().decode(u8.subarray(off+46,off+46+nlen));
+      off+=46+nlen+elen+clen;
+      if(!/\.csv$/i.test(name)||/(^|\/)(__MACOSX|\.)/.test(name)) continue;
+      var start=loc+30+dv.getUint16(loc+26,true)+dv.getUint16(loc+28,true), data=u8.slice(start,start+csize);
+      jobs.push((function(name,method,data){
+        if(method===0) return Promise.resolve({name:name, text:decodeText(data)});
+        if(method===8&&typeof DecompressionStream!=="undefined")
+          return new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"))).arrayBuffer()
+            .then(function(b){ return {name:name, text:decodeText(new Uint8Array(b))}; });
+        return Promise.reject(new Error("Unzip it first, then pick the CSV files"));
+      })(name.split("/").pop(),method,data));
+    }
+    return Promise.all(jobs);
+  }
+  function readImportFiles(files){
+    return Promise.all(Array.prototype.map.call(files, function(f){
+      return f.arrayBuffer().then(function(buf){
+        var u8=new Uint8Array(buf);
+        if(u8[0]===0x50&&u8[1]===0x4b&&u8[2]===3&&u8[3]===4) return unzipCsvs(buf);
+        return [{name:f.name, text:decodeText(u8)}];
+      });
+    })).then(function(lists){ return [].concat.apply([], lists); });
+  }
+
+  // CSV rows -> sessions. Rows of one session share session_id (or date + place when there's none).
+  function csvSessions(files, res){
+    var groups={}, order=[];
+    files.forEach(function(file, fi){
+      var rows=parseCsv(file.text); if(!rows.length) return;
+      var head=rows[0].map(impLow), col={};
+      head.forEach(function(h,i){ col[h.replace(/ /g,"_")]=i; });
+      if(col.date==null||col.category==null){ res.badFiles.push(file.name); return; }
+      function g(r,k){ var i=col[k]; return i==null?"":String(r[i]==null?"":r[i]).trim(); }
+      for(var ri=1;ri<rows.length;ri++){
+        var r=rows[ri], mode=IMP_MODES[impLow(g(r,"category"))], date=impDate(g(r,"date"));
+        if(!mode||!date){ res.badRows++; continue; }
+        var sid=g(r,"session_id"), place=g(r,"place"), name=g(r,"name");
+        var key=mode==="multi" ? (sid ? "m|"+sid+"|"+date : "m|"+fi+"|"+ri)
+               : sid ? mode+"|"+sid+"|"+date : mode+"|f"+fi+"|"+date+"|"+impLow(place);
+        var grp=groups[key];
+        if(grp && grp.file!==fi){ res.fileDupRows++; continue; }     // same session in two of the picked files
+        if(!grp){
+          grp=groups[key]={ file:fi, sid:+sid||null, mode:mode, date:date, place:place, note:g(r,"session_note"),
+                            region:g(r,"region"), lat:impNum(g(r,"lat")), lng:impNum(g(r,"lng")), ticks:[], entries:[], effort:0, activity:"" };
+          order.push(grp);
+        }
+        if(!grp.region) grp.region=g(r,"region");
+        if(mode==="cross"){
+          var eff=IMP_EFFORT.indexOf(impLow(g(r,"effort"))); if(eff>0) grp.effort=eff;
+          var kind={sets:"sets",endurance:"endurance",other:"effort",effort:"effort"}[impLow(g(r,"exercise_kind"))];
+          if(!kind){ grp.activity=name||grp.activity; continue; }   // effort-only session, no exercises
+          var dmin=impNum(g(r,"duration_min"));
+          grp.entries.push({ name:name||"Exercise", kind:kind, sets:impNum(g(r,"sets")), reps:impNum(g(r,"reps")), weight:impNum(g(r,"weight_kg")),
+                             distance_m:impNum(g(r,"distance_m")), elevation_m:impNum(g(r,"elevation_m")), duration_min:dmin,
+                             duration_s:dmin?Math.round(+dmin*60):"" });
+        } else if(mode==="multi"){
+          var pitches=g(r,"pitch_log").split(";").map(function(p){
+            var t=p.trim().split(/\s+/); if(t.length<3||!/^P\d+$/i.test(t[0])) return null;
+            var len=0; if(/^\d+m$/i.test(t[t.length-1])) len=parseInt(t.pop(),10);
+            var result=t.slice(3).join("").toLowerCase();
+            return { grade:t[1]==="?"?"":t[1], role:t[2]==="second"?"second":"lead", result:result||"attempt", length:len };
+          }).filter(Boolean);
+          grp.ascent={ date:date, area:place, name:name, grade_system:impLow(g(r,"grade_system"))||"french", overall_grade:g(r,"grade"),
+                       pitches:pitches, pitches_total:parseInt(g(r,"pitches_total"),10)||pitches.length||1, high_point:parseInt(g(r,"pitches_done"),10)||0,
+                       length:parseInt(g(r,"length_m"),10)||0, note:g(r,"note")||g(r,"session_note"),
+                       region:g(r,"region"), lat:impNum(g(r,"lat")), lng:impNum(g(r,"lng")) };
+          grp.sig=[date, impLow(place), impLow(name), impNum(g(r,"pitches_done")), impNum(g(r,"pitches_total"))].join("|");
+        } else {
+          var b=impLow(g(r,"benchmark"));
+          grp.ticks.push({ name:name, grade:g(r,"grade"), grade_system:impLow(g(r,"grade_system"))||(["board","boulder","gymboulder"].indexOf(mode)>=0?"font":"french"),
+                           result:impResult(g(r,"result")), tries:Math.max(1,parseInt(g(r,"tries"),10)||1), length:parseInt(g(r,"length_m"),10)||"",
+                           note:g(r,"note"), benchmark:b==="yes"||b==="1"||b==="true", sync_key:g(r,"sync_key") });
+        }
+      }
+    });
+    order.forEach(function(s){
+      if(s.mode==="cross") s.sig=s.date+"|"+s.effort+"|"+(s.entries.length ? s.entries.map(function(e){
+          return [impLow(e.name), e.kind, e.sets, e.reps, e.weight, e.distance_m, e.elevation_m, e.duration_min].join(",");
+        }).sort().join(";") : "act:"+impLow(s.activity));
+    });
+    return order;
+  }
+  // What a climb looks like for the duplicate check. Synced board climbs also carry their sync key,
+  // but older exports don't have that column, so the key is only an extra way to match.
+  function tickSig(t){ return [impLow(t.name), impLow(t.grade).replace(/ /g,""), t.result, t.tries].join("|"); }
+
+  // Compare the file with what's already logged and build the list of writes.
+  function planImport(fileSess, haveSess){
+    var single={}, whole={};
+    haveSess.forEach(function(s){
+      if(s.mode==="multi"||s.mode==="cross"){ whole[s.mode+"#"+s.sig]=(whole[s.mode+"#"+s.sig]||0)+1; return; }
+      var k=s.date+"|"+s.mode+"|"+impLow(s.place), p=single[k]||(single[k]={ids:[], n:{}, keys:{}});
+      if(s.sid) p.ids.push(s.sid);
+      s.ticks.forEach(function(t){ var q=tickSig(t); p.n[q]=(p.n[q]||0)+1; if(t.sync_key) p.keys[t.sync_key]=q; });
+    });
+    var plan={ items:[], newSessions:0, newTicks:0, newEntries:0, appendTicks:0, appendSessions:0, dupSessions:0, dupTicks:0,
+               fileSessions:fileSess.length, fileTicks:0, fileEntries:0 }, ref=0;
+    fileSess.sort(function(a,b){ return a.date<b.date?-1:a.date>b.date?1:0; });
+    fileSess.forEach(function(s){
+      if(s.mode==="multi"||s.mode==="cross"){
+        plan.fileTicks+=s.mode==="multi"?1:0; plan.fileEntries+=s.entries.length;
+        var k=s.mode+"#"+s.sig;
+        if(whole[k]>0){ whole[k]--; plan.dupSessions++; return; }
+        plan.newSessions++;
+        if(s.mode==="multi"){ plan.newTicks++; plan.items.push({ ref:++ref, op:"multi", ascent:s.ascent, cost:9 }); }
+        else { plan.newEntries+=s.entries.length;
+          plan.items.push({ ref:++ref, op:"new", cost:1+2*s.entries.length,
+            session:{ date:s.date, mode:"cross", place:s.activity, note:s.note, intensity:s.effort }, entries:s.entries }); }
+        return;
+      }
+      plan.fileTicks+=s.ticks.length;
+      var pool=single[s.date+"|"+s.mode+"|"+impLow(s.place)], fresh=[];
+      var byKey=function(t){ return !!t.sync_key; };   // keyed climbs first, so a key match can't be taken by a look-alike
+      s.ticks.filter(byKey).concat(s.ticks.filter(function(t){ return !byKey(t); })).forEach(function(t){
+        var q=pool&&t.sync_key&&pool.keys[t.sync_key];
+        if(q){ delete pool.keys[t.sync_key]; if(pool.n[q]>0) pool.n[q]--; plan.dupTicks++; return; }   // same synced ascent, even if re-graded since
+        q=tickSig(t);
+        if(pool&&pool.n[q]>0){ pool.n[q]--; plan.dupTicks++; } else fresh.push(t);
+      });
+      if(!fresh.length){ plan.dupSessions++; return; }
+      var outdoor=s.mode==="crag"||s.mode==="boulder", per=outdoor?2:1;
+      if(pool&&pool.ids.length){   // same day, same place, but some climbs are missing: add them to the session you have
+        plan.appendSessions++; plan.appendTicks+=fresh.length;
+        for(var i=0;i<fresh.length;i+=IMP_CHUNK){ var c=fresh.slice(i,i+IMP_CHUNK);
+          plan.items.push({ ref:++ref, op:"append", session_id:pool.ids[0], ticks:c, cost:1+per*c.length }); }
+        return;
+      }
+      plan.newSessions++; plan.newTicks+=fresh.length;
+      var first=fresh.slice(0,IMP_CHUNK), head=++ref;
+      plan.items.push({ ref:head, op:"new", ticks:first, cost:(outdoor?3:1)+per*first.length,
+        session:{ date:s.date, mode:s.mode, place:s.place, note:s.note, region:s.region, lat:s.lat, lng:s.lng } });
+      for(var j=IMP_CHUNK;j<fresh.length;j+=IMP_CHUNK){ var cc=fresh.slice(j,j+IMP_CHUNK);   // long sessions go in parts
+        plan.items.push({ ref:++ref, op:"append", parent:head, ticks:cc, cost:1+per*cc.length }); }
+    });
+    return plan;
+  }
+
+  function impNumTxt(n){ return n.toLocaleString(); }
+  function impPlural(n, one, many){ return impNumTxt(n)+" "+(n===1?one:many); }
+  function renderImpPlan(res){
+    var box=$("impBox"), btn=$("impBtn"), p=res.plan, h="";
+    h+='<div class="imp-files">'+res.files.map(function(f){ return esc(f.name); }).join(", ")+'</div>';
+    if(!p || !p.fileSessions){
+      h+='Nothing to import in '+(res.files.length===1?'this file':'these files')+'.';
+      if(res.badFiles.length) h+='<div class="warn">'+esc(res.badFiles.join(", "))+' doesn’t look like a My Logbook export (it needs <i>date</i> and <i>category</i> columns).</div>';
+      box.innerHTML=h; box.style.display=""; btn.style.display="none"; return;
+    }
+    var bits=[impPlural(p.fileSessions,"session","sessions")];
+    if(p.fileTicks) bits.push(impPlural(p.fileTicks,"climb","climbs"));
+    if(p.fileEntries) bits.push(impPlural(p.fileEntries,"exercise","exercises"));
+    h+='Found '+bits.join(", ")+'.<ul>';
+    if(p.newSessions){
+      var inner=[]; if(p.newTicks) inner.push(impPlural(p.newTicks,"climb","climbs")); if(p.newEntries) inner.push(impPlural(p.newEntries,"exercise","exercises"));
+      h+='<li><b>'+impPlural(p.newSessions,"new session","new sessions")+'</b>'+(inner.length?' ('+inner.join(", ")+')':'')+'</li>';
+    }
+    if(p.appendTicks) h+='<li><b>'+impPlural(p.appendTicks,"climb","climbs")+'</b> missing from '+impPlural(p.appendSessions,"session","sessions")+' you already have</li>';
+    if(p.dupSessions) h+='<li>'+impPlural(p.dupSessions,"session is","sessions are").replace(/^(\S+)/,"<b>$1</b>")+' already in your logbook — skipped</li>';
+    h+='</ul>';
+    if(res.badRows) h+='<div class="warn">'+impPlural(res.badRows,"row","rows")+' skipped: no readable date or category.</div>';
+    if(res.fileDupRows) h+='<div class="warn">'+impPlural(res.fileDupRows,"row appears","rows appear")+' in more than one of the files — counted once.</div>';
+    if(res.badFiles.length) h+='<div class="warn">Not a My Logbook export: '+esc(res.badFiles.join(", "))+'</div>';
+    box.innerHTML=h; box.style.display="";
+    var todo=p.newSessions||p.appendTicks;
+    btn.style.display=todo?"":"none"; btn.disabled=false;
+    var what=[]; if(p.newSessions) what.push(impPlural(p.newSessions,"session","sessions")); if(p.appendTicks) what.push(impPlural(p.appendTicks,"climb","climbs"));
+    btn.textContent="Import "+what.join(" + ");
+    if(!todo) box.innerHTML+='<div style="margin-top:6px"><b>Everything is already in your logbook.</b></div>';
+  }
+
+  $("impPick").addEventListener("click", function(){ if(!impBusy) $("impFile").click(); });
+  $("impFile").addEventListener("change", function(){
+    var files=this.files; if(!files||!files.length) return;
+    var box=$("impBox"), btn=$("impBtn");
+    impPlan=null; btn.style.display="none"; box.style.display=""; box.textContent="Reading…";
+    var res={ files:[], badFiles:[], badRows:0, fileDupRows:0 };
+    readImportFiles(files).then(function(list){
+      res.files=list;
+      var fileSess=csvSessions(list, res);
+      if(!fileSess.length){ renderImpPlan(res); return; }
+      box.textContent="Comparing with your logbook…";
+      return fetch(API+"/export?sep=comma&files=one", { headers:authHeaders({}) }).then(function(r){
+        if(!r.ok) throw new Error(r.status===401?"unauthorized":"offline");
+        return r.text();
+      }).then(function(text){
+        var have=csvSessions([{name:"logbook", text:text}], { badFiles:[], badRows:0, fileDupRows:0 });
+        res.plan=impPlan=planImport(fileSess, have);
+        renderImpPlan(res);
+      });
+    }).catch(function(err){
+      box.textContent=err.message==="unauthorized"?"Sign-in needed to import.":err.message==="offline"||err.message==="Failed to fetch"?"Couldn’t reach your logbook — check the connection and pick the file again.":err.message;
+    }).then(function(){ $("impFile").value=""; });
+  });
+
+  $("impBtn").addEventListener("click", function(){
+    if(!impPlan||impBusy) return;
+    var items=impPlan.items, total=items.reduce(function(a,it){ return a+it.cost; },0), spent=0, i=0, ids={};
+    var done={ sessions:0, ticks:0, skipped:0, failed:0 }, btn=this, box=$("impBox");
+    impBusy=true; btn.disabled=true;
+    box.insertAdjacentHTML("beforeend", '<div class="bar"><span id="impBar"></span></div>');
+    function next(){
+      var batch=[], cost=0;
+      while(i<items.length){
+        var it=items[i];
+        if(it.parent!=null){
+          if(ids[it.parent]===undefined){ if(batch.length) break; ids[it.parent]=null; }
+          if(ids[it.parent]===null){ done.failed++; i++; continue; }   // its first part didn't make it
+          it.session_id=ids[it.parent];
+        }
+        if(batch.length&&(cost+it.cost>IMP_BUDGET||batch.length>=50)) break;
+        batch.push(it); cost+=it.cost; i++;
+      }
+      if(!batch.length) return Promise.resolve();
+      var payload=batch.map(function(it){ var o={ref:it.ref, op:it.parent!=null?"append":it.op};
+        ["session","ticks","entries","session_id","ascent"].forEach(function(k){ if(it[k]!=null) o[k]=it[k]; }); return o; });
+      return api("/restore", { method:"POST", body:JSON.stringify({ items:payload }) }).then(function(r){
+        (r&&r.results||[]).forEach(function(x){
+          var it=batch.filter(function(b){ return b.ref===x.ref; })[0]; if(!it) return;
+          if(x.error){ done.failed++; ids[x.ref]=null; return; }
+          ids[x.ref]=x.session_id;
+          if(it.op!=="append"&&it.parent==null) done.sessions++;
+          done.ticks+=x.ticks||0; done.skipped+=x.skipped||0;
+        });
+        spent+=cost; btn.textContent="Importing… "+Math.round(100*spent/Math.max(1,total))+"%";
+        var bar=$("impBar"); if(bar) bar.style.width=(100*spent/Math.max(1,total))+"%";
+        return next();
+      });
+    }
+    btn.textContent="Importing…";
+    next().then(function(){
+      var msg="Imported "+impPlural(done.sessions,"session","sessions")+(done.ticks?" and "+impPlural(done.ticks,"climb","climbs"):"")+".";
+      if(done.skipped) msg+=" "+impPlural(done.skipped,"board climb was","board climbs were")+" already synced.";
+      if(done.failed) msg+=" "+impPlural(done.failed,"part","parts")+" couldn’t be saved — pick the file again to retry; nothing gets doubled.";
+      box.innerHTML='<b>Done.</b> '+esc(msg); flash("Import finished");
+    }).catch(function(err){
+      box.innerHTML='<b>Stopped</b> after '+impPlural(done.sessions,"session","sessions")+': '+esc(err.message||"request failed")+
+        '. Pick the file again to continue — what’s already in won’t be doubled.';
+    }).then(function(){
+      impBusy=false; impPlan=null; btn.style.display="none"; btn.disabled=false;
+      historyLoaded=false; statsKey=null; refreshBootstrap();
+    });
   });
 
   function renderSettings(){

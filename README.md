@@ -104,6 +104,15 @@ Open with the gear icon next to the date.
   (bundled as a ZIP). It opens cleanly in Excel, Numbers, Google Sheets, or pandas/R.
   Choose a comma or semicolon separator; Excel in German-speaking countries needs the
   semicolon.
+- **Import:** load an export back in, for example on a fresh install or to move to a new
+  database. Pick the CSV files or the ZIP; you'll see how many sessions are new and how many
+  are already in your logbook before anything is written. Duplicates are skipped at the
+  level of single climbs, so importing the same file twice changes nothing, and climbs that
+  are missing from a session you already have are added to it. Crags come back with their
+  region and map position, and synced board climbs keep their sync key, so a later Tension
+  Board sync won't add them twice. Files that went through Excel (semicolons, `21.09.2026`
+  dates, decimal commas) work too. The CSV holds your log, not everything: route notes and
+  styles, crags you never logged a session at, and gym grade lists aren't part of it.
 
 Categories and defaults are saved to your logbook, so they apply on every device you use.
 
@@ -353,6 +362,7 @@ All endpoints are under `/api`.
 | DELETE | `/exercises/:id` | remove an exercise from the picker (logged training is kept) |
 | GET | `/stats?scope=&from=&to=&hide=` | everything the Stats tab shows; `hide` is a comma list of categories to leave out |
 | GET | `/export?modes=&from=&to=&sep=&files=` | tidy CSV of your logbook (`modes`: comma list of categories; `sep`: `comma` or `semicolon`; `files=per`: ZIP with one CSV per category) |
+| POST | `/restore` | write back sessions parsed from an export `{items:[…]}`; the app checks for duplicates and sends small batches |
 | GET / PUT | `/settings/:key` | small key–value settings (gym grades, `app_settings` from the Settings page) |
 | POST | `/import/board` | bulk-import board ascents (bearer `IMPORT_TOKEN`) |
 | POST | `/import/sessions` | bulk-import outdoor sessions (bearer `IMPORT_TOKEN`) |
