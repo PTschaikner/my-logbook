@@ -1,0 +1,16 @@
+{
+  "name": "crag-log",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A hosted climbing log \u2014 Cloudflare Pages + D1.",
+  "scripts": {
+    "db:create": "wrangler d1 create craglog",
+    "db:schema": "wrangler d1 execute craglog --file=./schema.sql --remote",
+    "db:seed": "wrangler d1 execute craglog --file=./seed-data.sql --remote",
+    "dev": "wrangler pages dev public",
+    "deploy": "wrangler pages deploy public"
+  },
+  "devDependencies": {
+    "wrangler": "^3.90.0"
+  }
+}

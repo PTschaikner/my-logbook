@@ -1,0 +1,14 @@
+{
+  "name": "My Logbook",
+  "short_name": "Logbook",
+  "description": "A paper-notebook climbing log — outdoor, gym, board, multipitch and training.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#E7E4DB",
+  "theme_color": "#E7E4DB",
+  "icons": [
+    { "src": "favicon.svg", "type": "image/svg+xml", "sizes": "any", "purpose": "any" },
+    { "src": "apple-touch-icon.png", "type": "image/png", "sizes": "180x180" },
+    { "src": "icon-512.png", "type": "image/png", "sizes": "512x512", "purpose": "any maskable" }
+  ]
+}

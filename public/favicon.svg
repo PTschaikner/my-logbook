@@ -1,0 +1,17 @@
+<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    #bg{fill:#ECE9E0} .frontM{fill:#C7C0B2} .backM{fill:#ACA597} .gl{stroke:#3AA05E} .gd{stroke:#2A6E46}
+    @media (prefers-color-scheme: dark){
+      #bg{fill:#1B1E24} .frontM{fill:#BBB6AB} .backM{fill:#D8D4CB} .gl{stroke:#45B96F} .gd{stroke:#2E8A52}
+    }
+  </style>
+  <defs>
+    <clipPath id="u"><path d="M33 79 L71 21 L93 79 Z"/><path d="M10 79 L31 46 L55 79 Z"/></clipPath>
+    <clipPath id="f"><path d="M10 79 L31 46 L55 79 Z"/></clipPath>
+  </defs>
+  <rect id="bg" width="100" height="100" rx="24"/>
+  <path class="backM" d="M33 79 L71 21 L93 79 Z"/>
+  <path class="frontM" d="M10 79 L31 46 L55 79 Z"/>
+  <path class="gd" fill="none" stroke-width="15" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="6" clip-path="url(#u)" d="M31 46 L43.4 63.1 L71 21"/>
+  <path class="gl" fill="none" stroke-width="15" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="6" clip-path="url(#f)" d="M31 46 L43.4 63.1 L71 21"/>
+</svg>

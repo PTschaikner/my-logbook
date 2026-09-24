@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Crag Log — Import</title>
+<style>
+  :root{--paper:#E7E4DB;--ink:#1B1E24;--ink-soft:#5B5F67;--card:#F3F1EA;--edge:#D8D3C6;--edge-strong:#C4BEAE;--accent:#1F53D6;--send:#2E7D4F}
+  @media(prefers-color-scheme:dark){:root{--paper:#14161A;--ink:#ECEAE3;--ink-soft:#969CA5;--card:#1D2026;--edge:#2A2E36;--edge-strong:#3A3F49;--accent:#6C90F4;--send:#4EB081}}
+  *{box-sizing:border-box} body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.5 -apple-system,system-ui,sans-serif;padding:0 0 60px}
+  .wrap{max-width:640px;margin:0 auto;padding:24px 16px}
+  h1{font-size:16px;letter-spacing:.2em;text-transform:uppercase;font-weight:800}
+  h1 span{color:var(--accent)}
+  p{color:var(--ink-soft)} b{color:var(--ink)}
+  ol{color:var(--ink-soft);padding-left:20px} ol li{margin:6px 0}
+  code{font-family:ui-monospace,Menlo,monospace;background:var(--card);border:1px solid var(--edge-strong);border-radius:6px;padding:2px 6px;font-size:13px;color:var(--ink)}
+  textarea{width:100%;min-height:130px;font:13px/1.5 ui-monospace,Menlo,monospace;color:var(--ink);background:var(--card);border:1px solid var(--edge-strong);border-radius:12px;padding:12px 14px;margin-top:8px}
+  .row{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
+  button{min-height:48px;padding:12px 18px;border-radius:12px;cursor:pointer;font:700 15px system-ui,sans-serif;border:1px solid transparent}
+  .solid{background:var(--accent);color:#fff} .ghost{background:var(--card);color:var(--ink);border:1px solid var(--edge-strong)}
+  .out{white-space:pre-wrap;font-family:ui-monospace,Menlo,monospace;font-size:12.5px;background:var(--card);border:1px solid var(--edge-strong);border-radius:12px;padding:12px 14px;margin-top:10px;display:none}
+  .msg{margin-top:10px;font-weight:700;color:var(--send)}
+  a{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Crag&nbsp;<span>Log</span> · Import</h1>
+  <p>Bring the crags and routes from your old single-file version into the database. This is a one-time step.</p>
+  <ol>
+    <li>Open your <b>old</b> Crag Log, open the browser console, and run:<br><code>copy(localStorage.craglog2)</code></li>
+    <li>Paste the copied text below.</li>
+    <li>Either push straight to your live API, or generate SQL to run with <code>wrangler</code>.</li>
+  </ol>
+
+  <textarea id="in" placeholder="Paste your old craglog2 value here…"></textarea>
+
+  <div class="row">
+    <button class="solid" id="push">Push to live API</button>
+    <button class="ghost" id="sql">Generate SQL instead</button>
+  </div>
+  <div class="msg" id="msg"></div>
+  <pre class="out" id="out"></pre>
+  <p style="margin-top:20px"><a href="/">← back to Crag Log</a></p>
+</div>
+
+<script>
+(function(){
+  var $=function(id){return document.getElementById(id);};
+  // try to prefill from this origin (works only if the old app lived here)
+  try{ var v=localStorage.getItem("craglog2"); if(v) $("in").value=v; }catch(e){}
+
+  function parse(){
+    var raw=$("in").value.trim();
+    if(!raw){ throw new Error("Nothing pasted."); }
+    var d=JSON.parse(raw);
+    var crags=d && d.crags && typeof d.crags==="object" ? d.crags : {};
+    var list=[];
+    Object.keys(crags).forEach(function(name){
+      var routes=Array.isArray(crags[name])?crags[name]:[];
+      list.push({ name:name, routes:routes.map(function(r){return {name:r.name||"",grade:r.grade||""};}).filter(function(r){return r.name;}) });
+    });
+    return list;
+  }
+  function esc(s){ return String(s).replace(/'/g,"''"); }
+
+  $("sql").addEventListener("click", function(){
+    try{
+      var list=parse(), lines=[];
+      list.forEach(function(c){
+        lines.push("INSERT OR IGNORE INTO crags (name) VALUES ('"+esc(c.name)+"');");
+        c.routes.forEach(function(r){
+          lines.push("INSERT OR IGNORE INTO routes (crag_id,name,grade) SELECT id,'"+esc(r.name)+"','"+esc(r.grade)+"' FROM crags WHERE name='"+esc(c.name)+"';");
+        });
+      });
+      var out=$("out"); out.style.display="block"; out.textContent=lines.join("\n");
+      var total=list.reduce(function(n,c){return n+c.routes.length;},0);
+      $("msg").textContent="Generated SQL for "+list.length+" crags / "+total+" routes. Copy it, save as seed-data.sql, then run:  wrangler d1 execute craglog --file=./seed-data.sql --remote";
+    }catch(e){ $("msg").style.color="var(--accent)"; $("msg").textContent="Error: "+e.message; }
+  });
+
+  $("push").addEventListener("click", function(){
+    var list;
+    try{ list=parse(); }catch(e){ $("msg").style.color="var(--accent)"; $("msg").textContent="Error: "+e.message; return; }
+    var secret=null;
+    function headers(){ var h={"content-type":"application/json"}; if(secret) h.authorization="Bearer "+secret; return h; }
+    function post(path,body){
+      return fetch("/api"+path,{method:"POST",headers:headers(),body:JSON.stringify(body)}).then(function(res){
+        if(res.status===401){ secret=prompt("App password:"); if(secret) return post(path,body); throw new Error("unauthorized"); }
+        return res.json();
+      });
+    }
+    $("msg").style.color="var(--send)"; $("msg").textContent="Importing…";
+    var done=0, routes=0;
+    (function next(i){
+      if(i>=list.length){ $("msg").textContent="Done — "+done+" crags, "+routes+" routes imported."; return; }
+      var c=list[i];
+      post("/crags",{name:c.name}).then(function(crag){
+        done++;
+        return Promise.all(c.routes.map(function(r){ routes++; return post("/routes",{crag_id:crag.id,name:r.name,grade:r.grade}); }));
+      }).then(function(){ $("msg").textContent="Importing… "+done+"/"+list.length+" crags"; next(i+1); })
+        .catch(function(e){ $("msg").style.color="var(--accent)"; $("msg").textContent="Error at "+c.name+": "+e.message; });
+    })(0);
+  });
+})();
+</script>
+</body>
+</html>

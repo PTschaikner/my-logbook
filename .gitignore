@@ -1,0 +1,18 @@
+node_modules/
+.wrangler/
+.dev.vars
+seed-data.sql
+.DS_Store
+# Tension sync — never commit secrets or exports
+functions/sync_tension/.env
+.env
+functions/sync_tension/.venv/
+functions/sync_tension/tension.csv
+functions/sync_tension/tension.sqlite
+# Route-database import — never commit personal logbook data or generated exports
+functions/import_routes/*.csv
+functions/import_routes/import_oldtable.sql
+functions/import_routes/.env
+functions/sync_oldTable/*.csv
+functions/sync_oldTable/import_oldtable.sql
+functions/sync_oldTable/.env
