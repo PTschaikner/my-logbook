@@ -1,4 +1,4 @@
-// Crag Log API — one Pages Function handling everything under /api/*.
+// My Logbook API — one Pages Function handling everything under /api/*.
 // Cloudflare routes any /api/... request here; we dispatch on method + path.
 //
 // Endpoints:

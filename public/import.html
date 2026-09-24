@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Crag Log — Import</title>
+<title>My Logbook — Import</title>
 <style>
   :root{--paper:#E7E4DB;--ink:#1B1E24;--ink-soft:#5B5F67;--card:#F3F1EA;--edge:#D8D3C6;--edge-strong:#C4BEAE;--accent:#1F53D6;--send:#2E7D4F}
   @media(prefers-color-scheme:dark){:root{--paper:#14161A;--ink:#ECEAE3;--ink-soft:#969CA5;--card:#1D2026;--edge:#2A2E36;--edge-strong:#3A3F49;--accent:#6C90F4;--send:#4EB081}}
@@ -28,7 +28,7 @@
   <h1>Crag&nbsp;<span>Log</span> · Import</h1>
   <p>Bring the crags and routes from your old single-file version into the database. This is a one-time step.</p>
   <ol>
-    <li>Open your <b>old</b> Crag Log, open the browser console, and run:<br><code>copy(localStorage.craglog2)</code></li>
+    <li>Open the <b>old</b> local-only version of the app, open the browser console, and run:<br><code>copy(localStorage.craglog2)</code></li>
     <li>Paste the copied text below.</li>
     <li>Either push straight to your live API, or generate SQL to run with <code>wrangler</code>.</li>
   </ol>
@@ -41,7 +41,7 @@
   </div>
   <div class="msg" id="msg"></div>
   <pre class="out" id="out"></pre>
-  <p style="margin-top:20px"><a href="/">← back to Crag Log</a></p>
+  <p style="margin-top:20px"><a href="/">← back to My Logbook</a></p>
 </div>
 
 <script>
@@ -75,7 +75,7 @@
       });
       var out=$("out"); out.style.display="block"; out.textContent=lines.join("\n");
       var total=list.reduce(function(n,c){return n+c.routes.length;},0);
-      $("msg").textContent="Generated SQL for "+list.length+" crags / "+total+" routes. Copy it, save as seed-data.sql, then run:  wrangler d1 execute craglog --file=./seed-data.sql --remote";
+      $("msg").textContent="Generated SQL for "+list.length+" crags / "+total+" routes. Copy it, save as seed-data.sql, then run:  wrangler d1 execute mylogbook --file=./seed-data.sql --remote";
     }catch(e){ $("msg").style.color="var(--accent)"; $("msg").textContent="Error: "+e.message; }
   });
 

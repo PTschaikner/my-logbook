@@ -1,6 +1,6 @@
 -- Adds grade-system tracking + a French display value to routes and ticks.
 -- Additive and safe to run on a live database with existing data.
--- Apply:  wrangler d1 execute craglog --file=./migrations/0001_grades_and_edit.sql --remote
+-- Apply:  wrangler d1 execute mylogbook --file=./migrations/0001_grades_and_edit.sql --remote
 
 ALTER TABLE routes ADD COLUMN grade_system TEXT NOT NULL DEFAULT 'french';
 ALTER TABLE routes ADD COLUMN grade_fr     TEXT NOT NULL DEFAULT '';

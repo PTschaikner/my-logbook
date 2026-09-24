@@ -1,12 +1,12 @@
-name = "crag-log"
+name = "my-logbook"
 pages_build_output_dir = "public"
 compatibility_date = "2026-01-01"
 
 # D1 binding — the code reads it as env.DB.
-# Replace database_id with the id printed by:  wrangler d1 create craglog
+# Replace database_id with the id printed by:  wrangler d1 create mylogbook
 [[d1_databases]]
 binding = "DB"
-database_name = "craglog"
+database_name = "mylogbook"
 database_id = "PASTE_YOUR_DATABASE_ID_HERE"
 
 # Optional shared-secret gate. If you set an APP_SECRET (see README), the API

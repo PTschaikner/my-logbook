@@ -150,6 +150,7 @@ my-logbook/
 ## Deploy
 
 You'll need Node.js, a Cloudflare account and a GitHub account. It takes about 15 minutes.
+The commands work the same on Windows (PowerShell), macOS and Linux.
 
 ### 1. Put the code in a GitHub repo
 Fork this repo, or copy the folder into a new repo of your own.
@@ -157,12 +158,12 @@ Fork this repo, or copy the folder into a new repo of your own.
 ### 2. Create the database
 ```bash
 npx wrangler login
-npx wrangler d1 create craglog
+npx wrangler d1 create mylogbook
 ```
 Copy the printed `database_id` into `wrangler.toml`, replacing the placeholder. Then load
 the schema:
 ```bash
-npx wrangler d1 execute craglog --file=./schema.sql --remote
+npx wrangler d1 execute mylogbook --file=./schema.sql --remote
 ```
 `schema.sql` is complete, so a fresh install doesn't need the files in `migrations/`.
 
@@ -177,7 +178,7 @@ Deploy. You'll get a URL like `https://<your-project>.pages.dev`.
 
 ### 4. Bind the database
 **Your Pages project → Settings → Bindings → Add → D1 database.** Variable name `DB`,
-database `craglog`. Save, then redeploy (**Deployments → Retry deployment**, or push a commit).
+database `mylogbook`. Save, then redeploy (**Deployments → Retry deployment**, or push a commit).
 
 ### 5. Lock it down
 Do this before you log anything. See [Security](#security).
@@ -223,11 +224,11 @@ in order:
 | `0008_exercises.sql` | training exercises and entries |
 
 ```bash
-npx wrangler d1 execute craglog --file=./migrations/0008_exercises.sql --remote
+npx wrangler d1 execute mylogbook --file=./migrations/0008_exercises.sql --remote
 ```
 
 All migrations only add things. If one ever goes wrong, D1 Time Travel can restore the
-database to any point in the last 30 days (`npx wrangler d1 time-travel info craglog`).
+database to any point in the last 30 days (`npx wrangler d1 time-travel info mylogbook`).
 
 ---
 
@@ -320,7 +321,7 @@ and the result mapping to your own file. See `functions/import_routes/README.md`
 
 ```bash
 npm install
-npx wrangler d1 execute craglog --file=./schema.sql --local
+npx wrangler d1 execute mylogbook --file=./schema.sql --local
 npx wrangler pages dev public
 ```
 This serves the site and runs the API against a local copy of the database.

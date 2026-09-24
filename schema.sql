@@ -1,5 +1,5 @@
--- Crag Log — D1 schema
--- Run once against your D1 database:  wrangler d1 execute craglog --file=./schema.sql --remote
+-- My Logbook — D1 schema
+-- Run once against your D1 database:  wrangler d1 execute mylogbook --file=./schema.sql --remote
 
 PRAGMA foreign_keys = ON;
 

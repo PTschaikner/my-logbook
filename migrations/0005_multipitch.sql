@@ -1,5 +1,5 @@
 -- Multipitch: routes carry a pitch topo; ticks record a per-ascent pitch log.
--- Apply: wrangler d1 execute craglog --file=./migrations/0005_multipitch.sql --remote
+-- Apply: wrangler d1 execute mylogbook --file=./migrations/0005_multipitch.sql --remote
 ALTER TABLE routes ADD COLUMN kind TEXT NOT NULL DEFAULT 'sport';   -- sport | multi
 ALTER TABLE routes ADD COLUMN pitches TEXT;                          -- JSON topo: [{n,grade,system,grade_fr,length}]
 ALTER TABLE routes ADD COLUMN pitches_total INTEGER NOT NULL DEFAULT 0;

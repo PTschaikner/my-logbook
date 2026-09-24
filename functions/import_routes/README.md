@@ -24,7 +24,7 @@ exists**, so re-running is safe. It creates routes as well as ticks.
 ## SQL alternative (no deploy, no token)
 ```bash
 python3 import_routedatabase.py routedatabase.csv --sql > import_oldtable.sql
-npx wrangler d1 execute craglog --file=import_oldtable.sql --remote
+npx wrangler d1 execute mylogbook --file=import_oldtable.sql --remote
 ```
 Also idempotent; stores ticks only (no `routes` rows).
 

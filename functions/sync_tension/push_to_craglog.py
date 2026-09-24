@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Push a BoardLib tension.csv into Crag Log's /api/import/board endpoint.
+"""Push a BoardLib tension.csv into My Logbook's /api/import/board endpoint.
 
 Runs after sync_tension.sh has produced the CSV. Safe to re-run: the server
 dedups on each ascent's import_key, so only new ascents are added.

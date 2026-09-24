@@ -110,7 +110,7 @@ def emit_sql(meta, sess):
     name/grade/result, so routes aren't created (route_id stays NULL) — history and
     stats read the tick fields directly."""
     out = ["-- My Logbook: import outdoor sessions. Safe to re-run (idempotent).",
-           "-- Run:  npx wrangler d1 execute craglog --file=import_oldtable.sql --remote"]
+           "-- Run:  npx wrangler d1 execute mylogbook --file=import_oldtable.sql --remote"]
     for name, m in meta.items():
         lat = "NULL" if m["lat"] is None else repr(m["lat"])
         lng = "NULL" if m["lng"] is None else repr(m["lng"])

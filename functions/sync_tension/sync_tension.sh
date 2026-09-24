@@ -78,7 +78,7 @@ if grades:
     top = ", ".join(f"{g}:{n}" for g, n in grades.most_common(6))
     print(f"top send grades : {top}")
 print("---------------------")
-print("Ready to import into Crag Log.")
+print("Ready to import into My Logbook.")
 PY
 # 5. Push into the live app (only if configured). Safe to re-run: the server
 #    dedups on each ascent, so this only ever adds new ascents.
@@ -88,8 +88,8 @@ PY
 #      export CF_ACCESS_CLIENT_ID='...'                  # optional: Access service token
 #      export CF_ACCESS_CLIENT_SECRET='...'              # optional
 if [ -n "${CRAGLOG_URL:-}" ] && [ -n "${CRAGLOG_IMPORT_TOKEN:-}" ]; then
-  echo "Pushing to Crag Log..."
+  echo "Pushing to My Logbook..."
   "$VPY" "$(dirname "$0")/push_to_craglog.py" "$OUT"
 else
-  echo "Skipping push: set CRAGLOG_URL and CRAGLOG_IMPORT_TOKEN to sync straight into Crag Log."
+  echo "Skipping push: set CRAGLOG_URL and CRAGLOG_IMPORT_TOKEN to sync straight into My Logbook."
 fi
